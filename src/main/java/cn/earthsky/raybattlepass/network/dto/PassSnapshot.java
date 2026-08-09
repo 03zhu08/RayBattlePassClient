@@ -36,6 +36,7 @@ public class PassSnapshot {
         public String subtitle;
         public long endTimeMs;
         public String themeId;
+        public int maxLevel;
         public String bannerAssetId;
         public String backgroundAssetId;
         public String rewardTrackBgAssetId;

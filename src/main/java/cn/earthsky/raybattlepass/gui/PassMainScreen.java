@@ -1050,6 +1050,11 @@ public class PassMainScreen extends GuiScreen {
                 PassFontUtil.drawStringWithShadow(ovInfo, x + 20, y + 208, 0xFFAAAAAA);
                 String ovCount = "已获得: " + snapshot.playerState.overflowCount + " 个";
                 PassFontUtil.drawStringWithShadow(ovCount, x + 20, y + 224, 0xFFCCCCCC);
+                if (snapshot.playerState.overflowCount > 0 && h >= 285) {
+                    int buttonColor = 0xFFF2C94C;
+                    GuiHelper.drawRect(x + 20, y + 246, x + 130, y + 270, buttonColor);
+                    PassFontUtil.drawCenteredString("领取循环宝箱", x + 75, y + 253, 0xFF000000);
+                }
             }
         } else {
             PassFontUtil.drawStringWithShadow("赛季币信息不可用，等待服务端下发数据...", x + 20, y + 40, 0xFF888888);
@@ -1388,6 +1393,18 @@ public class PassMainScreen extends GuiScreen {
             int hitH = compactLayout ? 18 : 16;
             if (GuiHelper.isMouseInRect(mouseX, mouseY, bx, gt + 14, hitW, hitH)) {
                 handler.sendClaimAll();
+                return;
+            }
+        }
+
+        // Task category tabs + hidden toggle
+        if (currentTab == TAB_CURRENCY && snapshot != null && snapshot.playerState != null
+                && snapshot.playerState.isMaxLevel && snapshot.playerState.overflowCount > 0) {
+            int cx = gl + NAV_WIDTH;
+            int cy = gt + TOP_BAR_HEIGHT;
+            int contentHeight = guiH - TOP_BAR_HEIGHT;
+            if (contentHeight >= 285 && GuiHelper.isMouseInRect(mouseX, mouseY, cx + 20, cy + 246, 110, 24)) {
+                handler.sendClaimOverflow();
                 return;
             }
         }

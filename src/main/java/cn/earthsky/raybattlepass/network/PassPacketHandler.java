@@ -107,12 +107,36 @@ public class PassPacketHandler {
                     handleCurrencyPatch(json);
                     break;
                 case "PASS_ASSET_HINT":
+                    handleAssetHint(json);
+                    break;
+                case "PASS_PARTNER_FEATURE":
+                    handlePartnerFeature(json);
+                    break;
+                case "PASS_ARCHIVE_DATA":
+                    handleArchiveData(json);
+                    break;
+                case "PASS_OVERFLOW_STATUS":
+                    handleOverflowStatus(json);
+                    break;
+                case "PASS_GUILD_TASK_DATA":
+                    handleGuildTaskData(json);
                     break;
                 case "PASS_CLOSE":
                     handleClose();
                     break;
             }
         });
+    }
+
+    @SubscribeEvent
+    public void onClientConnected(FMLNetworkEvent.ClientConnectedToServerEvent event) {
+        Minecraft.getMinecraft().addScheduledTask(this::sendHandshake);
+    }
+
+    @SubscribeEvent
+    public void onClientDisconnected(FMLNetworkEvent.ClientDisconnectionFromServerEvent event) {
+        fragments.clear();
+        RayBattlePass.instance.updateSnapshot(null);
     }
 
     private void handleFragment(String json) {
@@ -181,6 +205,11 @@ public class PassPacketHandler {
             case "PASS_TOAST": handleToast(json); break;
             case "PASS_ERROR": handleError(json); break;
             case "PASS_CURRENCY_PATCH": handleCurrencyPatch(json); break;
+            case "PASS_ASSET_HINT": handleAssetHint(json); break;
+            case "PASS_PARTNER_FEATURE": handlePartnerFeature(json); break;
+            case "PASS_ARCHIVE_DATA": handleArchiveData(json); break;
+            case "PASS_OVERFLOW_STATUS": handleOverflowStatus(json); break;
+            case "PASS_GUILD_TASK_DATA": handleGuildTaskData(json); break;
             case "PASS_CLOSE": handleClose(); break;
             default: break;
         }
@@ -189,6 +218,9 @@ public class PassPacketHandler {
     private void handleSnapshot(String json) {
         PassSnapshot snapshot = JsonUtil.fromPayload(json, PassSnapshot.class);
         if (snapshot == null) return;
+        // BungeeCord backend switches do not always create a new client connection.
+        // Re-announce the client whenever a backend successfully delivers a snapshot.
+        sendHandshake();
         RayBattlePass.instance.updateSnapshot(snapshot);
         GuiScreen current = Minecraft.getMinecraft().currentScreen;
         if (current instanceof PassMainScreen) {
@@ -196,6 +228,10 @@ public class PassPacketHandler {
         } else {
             Minecraft.getMinecraft().displayGuiScreen(new PassMainScreen(snapshot));
         }
+        sendRequestAssets();
+        sendRequestPartnerData();
+        sendRequestArchive();
+        sendRequestOverflow();
     }
 
     private void handleStatePatch(String json) {
@@ -275,6 +311,54 @@ public class PassPacketHandler {
         GuiScreen current = Minecraft.getMinecraft().currentScreen;
         if (current instanceof PassMainScreen) {
             ((PassMainScreen) current).applyCurrencyPatch(patch);
+        }
+    }
+
+    private void handleAssetHint(String json) {
+        AssetHint hint = JsonUtil.fromPayload(json, AssetHint.class);
+        PassSnapshot snapshot = RayBattlePass.instance.getCachedSnapshot();
+        if (hint == null || snapshot == null) return;
+        PassSnapshotMerger.mergeAssets(snapshot, hint);
+        refreshOpenScreen(snapshot);
+    }
+
+    private void handlePartnerFeature(String json) {
+        PartnerFeature feature = JsonUtil.fromPayload(json, PartnerFeature.class);
+        PassSnapshot snapshot = RayBattlePass.instance.getCachedSnapshot();
+        if (feature == null || snapshot == null) return;
+        PassSnapshotMerger.mergePartner(snapshot, feature);
+        refreshOpenScreen(snapshot);
+    }
+
+    private void handleArchiveData(String json) {
+        ArchiveData data = JsonUtil.fromPayload(json, ArchiveData.class);
+        PassSnapshot snapshot = RayBattlePass.instance.getCachedSnapshot();
+        if (data == null || snapshot == null) return;
+        PassSnapshotMerger.mergeArchives(snapshot, data);
+        refreshOpenScreen(snapshot);
+    }
+
+    private void handleOverflowStatus(String json) {
+        OverflowStatus status = JsonUtil.fromPayload(json, OverflowStatus.class);
+        PassSnapshot snapshot = RayBattlePass.instance.getCachedSnapshot();
+        if (status == null || snapshot == null || snapshot.playerState == null) return;
+        PassSnapshotMerger.mergeOverflow(snapshot, status);
+        refreshOpenScreen(snapshot);
+    }
+
+    private void handleGuildTaskData(String json) {
+        GuildTaskData data = JsonUtil.fromPayload(json, GuildTaskData.class);
+        PassSnapshot snapshot = RayBattlePass.instance.getCachedSnapshot();
+        if (data == null || snapshot == null) return;
+        PassSnapshotMerger.mergeGuildTasks(snapshot, data);
+        refreshOpenScreen(snapshot);
+    }
+
+    private void refreshOpenScreen(PassSnapshot snapshot) {
+        RayBattlePass.instance.updateSnapshot(snapshot);
+        GuiScreen current = Minecraft.getMinecraft().currentScreen;
+        if (current instanceof PassMainScreen) {
+            ((PassMainScreen) current).refreshSnapshot(snapshot);
         }
     }
 
@@ -451,6 +535,37 @@ public class PassPacketHandler {
         sendMessage("{\"messageType\":\"PASS_PAGE_REQUEST\",\"page\":" + page + "}");
     }
 
+    public void sendRequestAssets() {
+        if (localMode) return;
+        sendMessage("{\"messageType\":\"PASS_REQUEST_ASSETS\"}");
+    }
+
+    public void sendRequestPartnerData() {
+        if (localMode) return;
+        sendMessage("{\"messageType\":\"PASS_REQUEST_PARTNER_DATA\"}");
+    }
+
+    public void sendRequestArchive() {
+        if (localMode) return;
+        sendMessage("{\"messageType\":\"PASS_REQUEST_ARCHIVE\"}");
+    }
+
+    public void sendRequestOverflow() {
+        if (localMode) return;
+        sendMessage("{\"messageType\":\"PASS_REQUEST_OVERFLOW\"}");
+    }
+
+    public void sendClaimOverflow() {
+        if (localMode) return;
+        sendMessage("{\"messageType\":\"PASS_CLAIM_OVERFLOW\"}");
+    }
+
+    public void sendRequestGuildTasks(String guildId) {
+        if (localMode || guildId == null || guildId.trim().isEmpty()) return;
+        sendMessage("{\"messageType\":\"PASS_REQUEST_GUILD_TASKS\",\"guildId\":\""
+                + escape(guildId.trim()) + "\"}");
+    }
+
     public void sendAck(String requestId) {
         if (localMode) return;
         sendMessage("{\"messageType\":\"PASS_ACK\",\"requestId\":\"" + escape(requestId) + "\"}");
@@ -462,6 +577,7 @@ public class PassPacketHandler {
     }
 
     private void sendMessage(String json) {
+        if (mainChannel == null) return;
         PacketBuffer buf = new PacketBuffer(Unpooled.wrappedBuffer(json.getBytes(StandardCharsets.UTF_8)));
         mainChannel.sendToServer(new FMLProxyPacket(buf, CH_MAIN));
     }

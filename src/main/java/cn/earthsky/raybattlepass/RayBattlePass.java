@@ -3,6 +3,7 @@ package cn.earthsky.raybattlepass;
 import cn.earthsky.raybattlepass.network.PassPacketHandler;
 import cn.earthsky.raybattlepass.network.dto.PassSnapshot;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 
 @Mod(modid = RayBattlePass.MOD_ID, version = RayBattlePass.VERSION,
@@ -22,6 +23,7 @@ public class RayBattlePass {
     public void init(FMLInitializationEvent event) {
         packetHandler = new PassPacketHandler();
         packetHandler.registerChannels();
+        FMLCommonHandler.instance().bus().register(packetHandler);
     }
 
     public PassPacketHandler getPacketHandler() {
