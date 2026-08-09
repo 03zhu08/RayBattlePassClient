@@ -1,0 +1,10 @@
+[{
+    "modid": "raybattlepass",
+    "name": "RayBattlePassClient",
+    "description": "空岛角色扮演服务器赛季通行证客户端界面",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "url": "",
+    "authorList": ["03zhu08"],
+    "dependencies": []
+}]
