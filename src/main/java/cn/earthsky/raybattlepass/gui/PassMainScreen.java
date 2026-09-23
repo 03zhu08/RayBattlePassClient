@@ -51,6 +51,7 @@ public class PassMainScreen extends GuiScreen {
     private boolean rewardDragged;
     private int rewardPointerStartX;
     private int rewardPointerLastX;
+    private long rewardPointerLastTime;
     private PassSnapshot.RewardCard pendingRewardCard;
 
     // Smooth scroll state - task list
@@ -765,8 +766,8 @@ public class PassMainScreen extends GuiScreen {
     private int[][] homeActionBounds(int x, int y, int w, int h) {
         int cx = x + w / 2, cy = y + h / 2;
         int radius = Math.max(24, Math.min(100, Math.min(w / 2 - 18, h / 2 - 38)));
-        int buttonW = Math.max(38, Math.min(118, w / 2 - radius - 10));
-        int buttonH = Math.min(76, Math.max(54, h - 90));
+        int buttonW = Math.max(48, Math.min(116, w / 2 - radius - 14));
+        int buttonH = 46;
         return new int[][] {
                 {cx - radius - buttonW - 6, cy - buttonH / 2, buttonW, buttonH},
                 {cx + radius + 6, cy - buttonH / 2, buttonW, buttonH}
@@ -776,17 +777,48 @@ public class PassMainScreen extends GuiScreen {
     private void drawHomeAction(int[] bounds, String label, int color, boolean reward) {
         int x = bounds[0], y = bounds[1], w = bounds[2], h = bounds[3];
         boolean hovered = isHovered(x, y, w, h);
-        GuiHelper.drawRect(x - 2, y - 2, x + w + 2, y + h + 2, hovered ? color : 0x55444444);
-        GuiHelper.drawRect(x, y, x + w, y + h, hovered ? 0xFF30352D : 0xEE1A1D1B);
-        GuiHelper.drawRect(x + 3, y + 3, x + w - 3, y + 4, color);
-        GuiHelper.drawRect(x + 3, y + h - 4, x + w - 3, y + h - 3, color);
-        int iconY = y + Math.max(18, h / 3);
-        drawDiamond(x + w / 2, iconY, hovered ? 14 : 12, hovered ? color : 0x88333333);
-        drawDiamond(x + w / 2, iconY, 5, reward ? primaryColor : accentColor);
-        PassFontUtil.drawCenteredString(label, x + w / 2, y + h - 22,
-                hovered ? 0xFFFFFFFF : color);
-        if (w >= 82) PassFontUtil.drawCenteredString(hovered ? "点击进入  >" : "点击进入",
-                x + w / 2, y + h - 12, hovered ? 0xFFEEEEEE : 0xFF777777);
+        int border = hovered ? color : (color & 0x00FFFFFF) | 0x88000000;
+        int backgroundTop = hovered ? 0xEE293334 : 0xE6191E20;
+        int backgroundBottom = hovered ? 0xEE1D2526 : 0xE6101415;
+
+        // A compact chamfered "control pod" that visually docks with the radar.
+        GuiHelper.drawRect(x + 5, y, x + w - 5, y + h, border);
+        GuiHelper.drawRect(x, y + 5, x + w, y + h - 5, border);
+        GuiHelper.drawGradientRect(x + 6, y + 1, x + w - 6, y + h - 1,
+                backgroundTop, backgroundBottom);
+        GuiHelper.drawGradientRect(x + 1, y + 6, x + w - 1, y + h - 6,
+                backgroundTop, backgroundBottom);
+        GuiHelper.drawRect(x + 7, y + 4, x + w - 7, y + 6, hovered ? color : 0x55444444);
+
+        int iconX = x + Math.min(19, Math.max(13, w / 5));
+        int iconY = y + h / 2;
+        if (w >= 78) {
+            if (reward) {
+                drawDiamond(iconX, iconY, hovered ? 8 : 7, hovered ? color : 0xAA8A7330);
+                drawDiamond(iconX, iconY, 3, color);
+            } else {
+                int lineColor = hovered ? color : 0xAA47757E;
+                for (int i = -1; i <= 1; i++) {
+                    int ly = iconY + i * 6;
+                    GuiHelper.drawRect(iconX - 7, ly - 1, iconX - 4, ly + 2, color);
+                    GuiHelper.drawRect(iconX - 1, ly, iconX + 8, ly + 1, lineColor);
+                }
+            }
+        }
+
+        int textX = x + (w < 78 ? w / 2 : 32);
+        int textW = w < 78 ? w : w - 35;
+        PassFontUtil.drawCenteredString(PassFontUtil.truncateString(label, textW - 4),
+                textX + textW / 2, y + 13, hovered ? 0xFFFFFFFF : color);
+        if (w >= 78) {
+            String hint = reward ? "赛季轨道" : "周期目标";
+            PassFontUtil.drawCenteredString(hint, textX + textW / 2, y + 27,
+                    hovered ? 0xFFCCD7D9 : 0xFF707A7C);
+        }
+        int arrowX = x + w - 7;
+        GuiHelper.drawRect(arrowX - 2, iconY - 3, arrowX, iconY - 1, hovered ? color : 0xFF666666);
+        GuiHelper.drawRect(arrowX, iconY - 1, arrowX + 2, iconY + 1, hovered ? color : 0xFF666666);
+        GuiHelper.drawRect(arrowX - 2, iconY + 1, arrowX, iconY + 3, hovered ? color : 0xFF666666);
     }
 
     private void drawCircle(int cx, int cy, int radius, int color) {
@@ -1334,6 +1366,7 @@ public class PassMainScreen extends GuiScreen {
                 rewardDragged = false;
                 rewardPointerStartX = mouseX;
                 rewardPointerLastX = mouseX;
+                rewardPointerLastTime = System.currentTimeMillis();
                 pendingRewardCard = card;
                 rewardScrollVelocity = 0;
                 return;
@@ -1389,12 +1422,20 @@ public class PassMainScreen extends GuiScreen {
         int x = toUiCoordinate(mouseX);
         if (Math.abs(x - rewardPointerStartX) >= 4) rewardDragged = true;
         if (!rewardDragged) return;
+        long now = System.currentTimeMillis();
         int dx = x - rewardPointerLastX;
-        rewardScrollOffset = Math.max(0f, Math.min(maxRewardScroll(), rewardScrollOffset - dx));
-        rewardRenderOffset = rewardScrollOffset;
-        rewardScrollVelocity = 0;
+        long elapsed = Math.max(1L, now - rewardPointerLastTime);
+        float maxScroll = maxRewardScroll();
+        float next = rewardScrollOffset - dx;
+        if (next < 0f) next = Math.max(-28f, next * 0.35f);
+        else if (next > maxScroll) next = Math.min(maxScroll + 28f,
+                maxScroll + (next - maxScroll) * 0.35f);
+        rewardScrollOffset = next;
+        float instantaneous = Math.max(-68f, Math.min(68f, (-dx * 50f) / elapsed));
+        rewardScrollVelocity = rewardScrollVelocity * 0.58f + instantaneous * 0.42f;
         rewardSpringBack = false;
         rewardPointerLastX = x;
+        rewardPointerLastTime = now;
     }
 
     @Override
@@ -1406,6 +1447,15 @@ public class PassMainScreen extends GuiScreen {
         if (clicked != null && clicked == pendingRewardCard) {
             selectedRewardCard = clicked;
             handler.sendRequestRewardPreview(clicked.rewardId);
+        }
+        if (rewardDragged) {
+            long idle = System.currentTimeMillis() - rewardPointerLastTime;
+            if (idle > 90L) rewardScrollVelocity *= Math.max(0f, 1f - (idle - 90L) / 140f);
+            if (rewardScrollOffset < 0f || rewardScrollOffset > maxRewardScroll()) {
+                rewardScrollVelocity = 0f;
+                rewardSpringBack = true;
+            }
+            rewardLastScrollTime = System.currentTimeMillis();
         }
         rewardPointerDown = false;
         rewardDragged = false;
@@ -1459,19 +1509,28 @@ public class PassMainScreen extends GuiScreen {
             if (rewardLastRenderTime == 0) { rewardLastRenderTime = now; rewardRenderOffset = rewardScrollOffset; }
             float dt = (now - rewardLastRenderTime) / 50.0f;
             if (dt <= 0) dt = 0.05f;
+            dt = Math.min(3f, dt);
             rewardLastRenderTime = now;
             float maxScroll = maxRewardScroll();
-            if (rewardSpringBack) {
+            if (rewardPointerDown && rewardDragged) {
+                // Follow the pointer through a damped target instead of snapping
+                // each mouse event directly onto the rendered track.
+                float follow = 1f - (float) Math.pow(0.22f, Math.min(3f, dt));
+                rewardRenderOffset += (rewardScrollOffset - rewardRenderOffset) * follow;
+            } else if (rewardSpringBack) {
                 float target = rewardScrollOffset < 0 ? 0 : (rewardScrollOffset > maxScroll ? maxScroll : rewardScrollOffset);
                 float diff = target - rewardScrollOffset;
                 if (Math.abs(diff) < 0.3f) { rewardScrollOffset = target; rewardSpringBack = false; }
-                else rewardScrollOffset += diff * 0.3f * dt;
+                else rewardScrollOffset += diff * (1f - (float) Math.pow(0.62f, Math.min(3f, dt)));
             } else if (Math.abs(rewardScrollVelocity) > 0.3f) {
                 rewardScrollOffset += rewardScrollVelocity * dt;
-                rewardScrollVelocity *= (float) Math.pow(0.88, dt);
+                rewardScrollVelocity *= (float) Math.pow(0.90, dt);
                 if (rewardScrollOffset < 0 || rewardScrollOffset > maxScroll) { rewardScrollVelocity = 0; rewardSpringBack = true; }
             } else { rewardScrollVelocity = 0; }
-            rewardRenderOffset += (rewardScrollOffset - rewardRenderOffset) * Math.min(1.0f, dt * 0.5f);
+            if (!(rewardPointerDown && rewardDragged)) {
+                float smoothing = 1f - (float) Math.pow(0.35f, Math.min(3f, dt));
+                rewardRenderOffset += (rewardScrollOffset - rewardRenderOffset) * smoothing;
+            }
             if (Math.abs(rewardScrollOffset - rewardRenderOffset) < 0.05f) rewardRenderOffset = rewardScrollOffset;
         }
         // Task scroll
@@ -1479,6 +1538,7 @@ public class PassMainScreen extends GuiScreen {
             if (taskLastRenderTime == 0) { taskLastRenderTime = now; taskRenderOffset = taskScrollOffset; }
             float dt = (now - taskLastRenderTime) / 50.0f;
             if (dt <= 0) dt = 0.05f;
+            dt = Math.min(3f, dt);
             taskLastRenderTime = now;
             int taskCount = buildFilteredTasks().size();
             float maxScroll = Math.max(0, taskCount * 48 - (guiH - TOP_BAR_HEIGHT - taskListTop() - 10));
