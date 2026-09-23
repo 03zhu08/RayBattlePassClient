@@ -112,9 +112,6 @@ public class PassPacketHandler {
                 case "PASS_PARTNER_FEATURE":
                     handlePartnerFeature(json);
                     break;
-                case "PASS_ARCHIVE_DATA":
-                    handleArchiveData(json);
-                    break;
                 case "PASS_OVERFLOW_STATUS":
                     handleOverflowStatus(json);
                     break;
@@ -207,7 +204,6 @@ public class PassPacketHandler {
             case "PASS_CURRENCY_PATCH": handleCurrencyPatch(json); break;
             case "PASS_ASSET_HINT": handleAssetHint(json); break;
             case "PASS_PARTNER_FEATURE": handlePartnerFeature(json); break;
-            case "PASS_ARCHIVE_DATA": handleArchiveData(json); break;
             case "PASS_OVERFLOW_STATUS": handleOverflowStatus(json); break;
             case "PASS_GUILD_TASK_DATA": handleGuildTaskData(json); break;
             case "PASS_CLOSE": handleClose(); break;
@@ -230,7 +226,6 @@ public class PassPacketHandler {
         }
         sendRequestAssets();
         sendRequestPartnerData();
-        sendRequestArchive();
         sendRequestOverflow();
     }
 
@@ -327,14 +322,6 @@ public class PassPacketHandler {
         PassSnapshot snapshot = RayBattlePass.instance.getCachedSnapshot();
         if (feature == null || snapshot == null) return;
         PassSnapshotMerger.mergePartner(snapshot, feature);
-        refreshOpenScreen(snapshot);
-    }
-
-    private void handleArchiveData(String json) {
-        ArchiveData data = JsonUtil.fromPayload(json, ArchiveData.class);
-        PassSnapshot snapshot = RayBattlePass.instance.getCachedSnapshot();
-        if (data == null || snapshot == null) return;
-        PassSnapshotMerger.mergeArchives(snapshot, data);
         refreshOpenScreen(snapshot);
     }
 
@@ -522,6 +509,14 @@ public class PassPacketHandler {
         sendMessage("{\"messageType\":\"PASS_GOTO_ACTION\",\"action\":\"" + escape(action) + "\"}");
     }
 
+    public void sendClaimTask(String taskId) {
+        if (localMode) {
+            ToastManager.show("领取任务", "本地模式: " + taskId);
+            return;
+        }
+        sendMessage("{\"messageType\":\"PASS_CLAIM_TASK\",\"taskId\":\"" + escape(taskId) + "\"}");
+    }
+
     public void sendRequestRewardPreview(String rewardId) {
         if (localMode) {
             Minecraft.getMinecraft().addScheduledTask(() -> localRewardPreview(rewardId));
@@ -543,11 +538,6 @@ public class PassPacketHandler {
     public void sendRequestPartnerData() {
         if (localMode) return;
         sendMessage("{\"messageType\":\"PASS_REQUEST_PARTNER_DATA\"}");
-    }
-
-    public void sendRequestArchive() {
-        if (localMode) return;
-        sendMessage("{\"messageType\":\"PASS_REQUEST_ARCHIVE\"}");
     }
 
     public void sendRequestOverflow() {

@@ -156,4 +156,10 @@ public class PassAnimation {
         a.addValue(0, 1, 200, "easeOutQuad", 400).name = "trackLightUp";
         return a;
     }
+
+    public static PassAnimation tabSwitchEffect() {
+        PassAnimation a = new PassAnimation();
+        a.addValue(0, 1, 260, "easeInOutQuad", 0).name = "transition";
+        return a;
+    }
 }

@@ -32,10 +32,10 @@ public class PassMainScreen extends GuiScreen {
 
     private int currentTab = 0;
     private static final int TAB_HOME = 0, TAB_REWARDS = 1, TAB_TASKS = 2;
-    private static final int TAB_CURRENCY = 3, TAB_PARTNERS = 4, TAB_ARCHIVE = 5;
+    private static final int TAB_CURRENCY = 3, TAB_PARTNERS = 4;
 
     private static final String[] TAB_LABELS = {
-        "首页", "奖励", "任务", "赛季币", "伙伴", "归档"
+        "首页", "奖励", "任务", "赛季币", "伙伴"
     };
 
     // Theme colors (from uiHints, with defaults)
@@ -82,6 +82,9 @@ public class PassMainScreen extends GuiScreen {
     private PassAnimation claimAnim;
     private PassAnimation purchaseAnim;
     private PassAnimation hiddenRevealAnim;
+    private PassAnimation tabSwitchAnim;
+    private float tabFromPosition;
+    private int hoverMouseX, hoverMouseY;
     private long openStartTimeMs;
 
     // Adaptive layout dimensions
@@ -89,7 +92,6 @@ public class PassMainScreen extends GuiScreen {
     private float uiScale = 1f;
     private boolean compactLayout;
     private boolean layoutInitialized;
-    private float archiveScrollOffset;
 
     // Settlement screen flag
     private boolean showSettlement;
@@ -277,9 +279,12 @@ public class PassMainScreen extends GuiScreen {
         if (claimAnim != null) { claimAnim.update(); if (claimAnim.isComplete()) claimAnim = null; }
         if (purchaseAnim != null) { purchaseAnim.update(); if (purchaseAnim.isComplete()) purchaseAnim = null; }
         if (hiddenRevealAnim != null) { hiddenRevealAnim.update(); if (hiddenRevealAnim.isComplete()) hiddenRevealAnim = null; }
+        if (tabSwitchAnim != null) { tabSwitchAnim.update(); if (tabSwitchAnim.isComplete()) tabSwitchAnim = null; }
 
         int uiMouseX = toUiCoordinate(mouseX);
         int uiMouseY = toUiCoordinate(mouseY);
+        hoverMouseX = uiMouseX;
+        hoverMouseY = uiMouseY;
         int guiLeft = getGuiLeft(), guiTop = getGuiTop();
 
         GlStateManager.pushMatrix();
@@ -325,7 +330,14 @@ public class PassMainScreen extends GuiScreen {
             case TAB_TASKS:   drawTasksTab(guiLeft, guiTop); break;
             case TAB_CURRENCY:drawCurrencyTab(guiLeft, guiTop); break;
             case TAB_PARTNERS:drawPartnersTab(guiLeft, guiTop); break;
-            case TAB_ARCHIVE: drawArchiveTab(guiLeft, guiTop); break;
+        }
+
+        if (tabSwitchAnim != null) {
+            float progress = tabSwitchAnim.get("transition");
+            int alpha = (int) ((1f - progress) * 175);
+            int contentX = guiLeft + NAV_WIDTH;
+            GuiHelper.drawRect(contentX, guiTop + TOP_BAR_HEIGHT,
+                    contentX + getContentWidth(), guiTop + guiH, alpha << 24);
         }
 
         drawRightPanel(guiLeft, guiTop, uiMouseX, uiMouseY);
@@ -385,7 +397,7 @@ public class PassMainScreen extends GuiScreen {
                 String claim = "领取(" + snapshot.playerState.claimableCount + ")";
                 int claimW = PassFontUtil.getStringWidth(claim) + 10;
                 int bx = x + w - claimW - 8;
-                GuiHelper.drawRect(bx, y + 14, bx + claimW, y + 32, primaryColor);
+                drawActionButton(bx, y + 14, claimW, 18, primaryColor, 0xFFFFFFFF);
                 PassFontUtil.drawCenteredString(claim, bx + claimW / 2, y + 19, 0xFF000000);
             } else if (snapshot.currencySummary != null) {
                 String currency = String.valueOf(snapshot.currencySummary.currentValue);
@@ -441,7 +453,7 @@ public class PassMainScreen extends GuiScreen {
             String claimStr = "一键领取 (" + snapshot.playerState.claimableCount + ")";
             int cw = PassFontUtil.getStringWidth(claimStr);
             int bx = x + w - cw - 16;
-            GuiHelper.drawRect(bx, y + 14, bx + cw + 8, y + 30, primaryColor);
+            drawActionButton(bx, y + 14, cw + 8, 16, primaryColor, 0xFFFFFFFF);
             PassFontUtil.drawString(claimStr, bx + 4, y + 17, 0xFF000000);
         }
     }
@@ -454,12 +466,17 @@ public class PassMainScreen extends GuiScreen {
         float navSlide = openAnim != null ? openAnim.get("navSlide") : 0;
         int ox = (int) navSlide;
         GuiHelper.drawRect(x, y, x + NAV_WIDTH, y + h, PANEL_BG);
+        float selectedRow = currentTab;
+        if (tabSwitchAnim != null) {
+            float progress = tabSwitchAnim.get("transition");
+            selectedRow = tabFromPosition + (currentTab - tabFromPosition) * progress;
+        }
+        int indicatorY = y + 10 + Math.round(selectedRow * 28);
         for (int i = 0; i < TAB_LABELS.length; i++) {
             int ty = y + 10 + i * 28;
             boolean sel = i == currentTab;
             boolean hov = !sel && GuiHelper.isMouseInRect(mouseX, mouseY, x, ty, NAV_WIDTH, 18);
             if (sel) {
-                GuiHelper.drawRect(x + 2 + ox, ty, x + 5 + ox, ty + 18, primaryColor);
                 GuiHelper.drawRect(x, ty, x + NAV_WIDTH, ty + 18, 0x33222222);
             } else if (hov) {
                 GuiHelper.drawRect(x, ty, x + NAV_WIDTH, ty + 18, 0x1AFFFFFF);
@@ -468,6 +485,28 @@ public class PassMainScreen extends GuiScreen {
             int textW = PassFontUtil.getStringWidth(TAB_LABELS[i]);
             PassFontUtil.drawStringWithShadow(TAB_LABELS[i], x + (NAV_WIDTH - textW) / 2 + ox, ty + 5, textColor);
         }
+        GuiHelper.drawRect(x + 2 + ox, indicatorY, x + 5 + ox, indicatorY + 18, primaryColor);
+    }
+
+    private boolean isHovered(int x, int y, int w, int h) {
+        return GuiHelper.isMouseInRect(hoverMouseX, hoverMouseY, x, y, w, h);
+    }
+
+    private void drawActionButton(int x, int y, int w, int h, int color, int highlight) {
+        GuiHelper.drawRect(x, y, x + w, y + h, color);
+        if (isHovered(x, y, w, h)) {
+            GuiHelper.drawRect(x, y, x + w, y + h, 0x38FFFFFF);
+            GuiHelper.drawRect(x, y, x + w, y + 2, highlight);
+            GuiHelper.drawRect(x, y + h - 1, x + w, y + h, highlight);
+        }
+    }
+
+    private int taskCategoryColumns() {
+        return getContentWidth() < 270 ? 2 : 3;
+    }
+
+    private int taskListTop() {
+        return taskCategoryColumns() == 2 ? 86 : 70;
     }
 
     // ─── Right Panel ───────────────────────────────────────────
@@ -621,10 +660,10 @@ public class PassMainScreen extends GuiScreen {
 
         // Buttons
         int btnY = py + ph - 36;
-        GuiHelper.drawRect(px + 10, btnY, px + 120, btnY + 24, primaryColor);
+        drawActionButton(px + 10, btnY, 110, 24, primaryColor, 0xFFFFFFFF);
         PassFontUtil.drawCenteredString("确认购买", px + 65, btnY + 7, 0xFF000000);
 
-        GuiHelper.drawRect(px + pw - 80, btnY, px + pw - 10, btnY + 24, 0xFF333333);
+        drawActionButton(px + pw - 80, btnY, 70, 24, 0xFF333333, primaryColor);
         PassFontUtil.drawCenteredString("取消", px + pw - 45, btnY + 7, 0xFFCCCCCC);
     }
 
@@ -805,7 +844,9 @@ public class PassMainScreen extends GuiScreen {
         else if ("rare".equals(card.rarity)) borderColor = accentColor;
         if ("claimable".equals(card.status)) borderColor = primaryColor;
 
-        GuiHelper.drawRect(cx, cy, cx + cw, cy + ch, 0xCC222222);
+        boolean hovered = isHovered(cx, cy, cw, ch);
+        GuiHelper.drawRect(cx, cy, cx + cw, cy + ch, hovered ? 0xEE303030 : 0xCC222222);
+        if (hovered) borderColor = 0xFFFFFFFF;
         GuiHelper.drawRect(cx, cy, cx + cw, cy + 1, borderColor);
         GuiHelper.drawRect(cx, cy, cx + 1, cy + ch, borderColor);
         GuiHelper.drawRect(cx, cy + ch - 1, cx + cw, cy + ch, borderColor);
@@ -888,10 +929,10 @@ public class PassMainScreen extends GuiScreen {
         }
 
         int btnY = py + ph - 30;
-        GuiHelper.drawRect(px + pw - 70, btnY, px + pw - 10, btnY + 20, 0xFF333333);
+        drawActionButton(px + pw - 70, btnY, 60, 20, 0xFF333333, primaryColor);
         PassFontUtil.drawCenteredString("关闭", px + pw - 40, btnY + 5, 0xFFCCCCCC);
         if ("claimable".equals(card.status)) {
-            GuiHelper.drawRect(px + 10, btnY, px + 90, btnY + 20, primaryColor);
+            drawActionButton(px + 10, btnY, 80, 20, primaryColor, 0xFFFFFFFF);
             PassFontUtil.drawCenteredString("领取奖励", px + 50, btnY + 5, 0xFF000000);
         }
     }
@@ -908,23 +949,25 @@ public class PassMainScreen extends GuiScreen {
         int h = guiH - TOP_BAR_HEIGHT;
         GuiHelper.drawRect(x, y, x + w, y + h, PANEL_BG);
 
-        // Category tabs - compact layout, two rows
-        for (int i = 0; i < Math.min(TASK_CATEGORIES.length, 3); i++) {
-            int cx = x + 10 + i * 82;
-            int color = i == taskCategory ? primaryColor : 0xFF888888;
-            PassFontUtil.drawStringWithShadow(TASK_CATEGORIES[i], cx, y + 8, color);
-        }
-        for (int i = 3; i < TASK_CATEGORIES.length; i++) {
-            int cx = x + 10 + (i - 3) * 82;
-            int color = i == taskCategory ? primaryColor : 0xFF888888;
-            PassFontUtil.drawStringWithShadow(TASK_CATEGORIES[i], cx, y + 24, color);
+        // Use two columns in narrow layouts so the hidden toggle stays clickable.
+        int columns = taskCategoryColumns();
+        for (int i = 0; i < TASK_CATEGORIES.length; i++) {
+            int cx = x + 10 + (i % columns) * 82;
+            int cy = y + 6 + (i / columns) * 16;
+            boolean hovered = isHovered(cx, cy, 70, 16);
+            if (hovered) GuiHelper.drawRect(cx, cy, cx + 70, cy + 16, 0x33FFFFFF);
+            int color = i == taskCategory ? primaryColor : hovered ? 0xFFFFFFFF : 0xFF888888;
+            PassFontUtil.drawStringWithShadow(TASK_CATEGORIES[i], cx, cy + 2, color);
         }
         // Hidden task toggle
         {
-            int color = showHiddenTasks ? 0xFFAA44FF : 0xFF555555;
+            boolean hovered = isHovered(x + w - 50, y + 6, 40, 16);
+            if (hovered) GuiHelper.drawRect(x + w - 50, y + 6, x + w - 10, y + 22, 0x33FFFFFF);
+            int color = showHiddenTasks ? 0xFFAA44FF : hovered ? 0xFFFFFFFF : 0xFF555555;
             PassFontUtil.drawStringWithShadow("隐藏", x + w - 50, y + 8, color);
         }
-        GuiHelper.drawHorizontalLine(x, x + w, y + 40, 0xFF444444);
+        int listTop = taskListTop();
+        GuiHelper.drawHorizontalLine(x, x + w, y + listTop - 30, 0xFF444444);
 
         if (snapshot != null && snapshot.taskSummary != null) {
             String sum = "每日 " + snapshot.taskSummary.dailyCompleted + "/" + snapshot.taskSummary.dailyTotal
@@ -933,7 +976,7 @@ public class PassMainScreen extends GuiScreen {
                 + "  公会 " + snapshot.taskSummary.guildCompleted + "/" + snapshot.taskSummary.guildTotal;
             PassFontUtil.drawStringWithShadow(
                     PassFontUtil.truncateString(sum, Math.max(80, w - 20)),
-                    x + 10, y + 46, 0xFFAAAAAA);
+                    x + 10, y + listTop - 24, 0xFFAAAAAA);
         }
 
         // Collect tasks
@@ -954,12 +997,12 @@ public class PassMainScreen extends GuiScreen {
             }
         }
 
-        int sy = y + 70 - (int) taskRenderOffset;
-        enableUiScissor(x, y + 62, w, Math.max(0, h - 80));
+        int sy = y + listTop - (int) taskRenderOffset;
+        enableUiScissor(x, y + listTop - 8, w, Math.max(0, h - listTop - 10));
         for (int i = 0; i < filtered.size(); i++) {
             PassSnapshot.TrackedTask t = filtered.get(i);
             int ty = sy + i * 48;
-            if (ty < y + 38 || ty > y + h) continue;
+            if (ty < y + listTop - 32 || ty > y + h) continue;
             drawTaskCard(x + 10, ty, w - 20, 42, t);
         }
         disableUiScissor();
@@ -996,11 +1039,18 @@ public class PassMainScreen extends GuiScreen {
         PassFontUtil.drawString(ps, cx + cw - PassFontUtil.getStringWidth(ps) - 10, cy + 22, 0xFF888888);
 
         if (t.progress >= t.targetValue) {
-            GuiHelper.drawRect(cx + cw - 70, cy + 4, cx + cw - 10, cy + 18, 0xFF335533);
-            PassFontUtil.drawCenteredString("已完成", cx + cw - 40, cy + 6, 0xFF55AA55);
+            if (t.manualClaim && !t.claimed) {
+                drawActionButton(cx + cw - 70, cy + 4, 60, 14, 0xFF335533, 0xFF55DD77);
+                PassFontUtil.drawCenteredString("领取", cx + cw - 40, cy + 6,
+                        isHovered(cx + cw - 70, cy + 4, 60, 14) ? 0xFFFFFFFF : 0xFF55DD77);
+            } else {
+                GuiHelper.drawRect(cx + cw - 70, cy + 4, cx + cw - 10, cy + 18, 0xFF335533);
+                PassFontUtil.drawCenteredString(t.manualClaim ? "已领取" : "已完成", cx + cw - 40, cy + 6, 0xFF55AA55);
+            }
         } else if (t.gotoAction != null) {
-            GuiHelper.drawRect(cx + cw - 70, cy + 4, cx + cw - 10, cy + 18, 0xFF333333);
-            PassFontUtil.drawCenteredString("前往", cx + cw - 40, cy + 6, primaryColor);
+            drawActionButton(cx + cw - 70, cy + 4, 60, 14, 0xFF333333, primaryColor);
+            PassFontUtil.drawCenteredString("前往", cx + cw - 40, cy + 6,
+                    isHovered(cx + cw - 70, cy + 4, 60, 14) ? 0xFFFFFFFF : primaryColor);
         }
     }
 
@@ -1051,8 +1101,7 @@ public class PassMainScreen extends GuiScreen {
                 String ovCount = "已获得: " + snapshot.playerState.overflowCount + " 个";
                 PassFontUtil.drawStringWithShadow(ovCount, x + 20, y + 224, 0xFFCCCCCC);
                 if (snapshot.playerState.overflowCount > 0 && h >= 285) {
-                    int buttonColor = 0xFFF2C94C;
-                    GuiHelper.drawRect(x + 20, y + 246, x + 130, y + 270, buttonColor);
+                    drawActionButton(x + 20, y + 246, 110, 24, primaryColor, 0xFFFFFFFF);
                     PassFontUtil.drawCenteredString("领取循环宝箱", x + 75, y + 253, 0xFF000000);
                 }
             }
@@ -1126,108 +1175,6 @@ public class PassMainScreen extends GuiScreen {
         }
     }
 
-    // ─── Archive Tab (P2: full past season data) ───────────────
-
-    private void drawArchiveTab(int guiLeft, int guiTop) {
-        int x = guiLeft + NAV_WIDTH, y = guiTop + TOP_BAR_HEIGHT;
-        int w = getContentWidth();
-        int h = guiH - TOP_BAR_HEIGHT;
-        GuiHelper.drawRect(x, y, x + w, y + h, PANEL_BG);
-        PassFontUtil.drawStringWithShadow("赛季归档", x + 10, y + 10, primaryColor);
-
-        // Current season card
-        if (snapshot != null && snapshot.seasonInfo != null) {
-            int cy = y + 10;
-            GuiHelper.drawRect(x + w - 160, cy, x + w - 10, cy + 18, 0xFF333333);
-            PassFontUtil.drawCenteredString("当前赛季", x + w - 85, cy + 4, primaryColor);
-        }
-
-        if (snapshot != null && snapshot.archiveSeasons != null && !snapshot.archiveSeasons.isEmpty()) {
-            int cardY = y + 40 - (int) archiveScrollOffset;
-            enableUiScissor(x, y + 32, w, Math.max(0, h - 82));
-            for (PassSnapshot.ArchiveSeason as : snapshot.archiveSeasons) {
-                int ch = 110;
-                if (cardY + ch < y + 32 || cardY > y + h - 50) {
-                    cardY += ch + 8;
-                    continue;
-                }
-                GuiHelper.drawRect(x + 10, cardY, x + w - 10, cardY + ch, 0xFF1A1A1A);
-                GuiHelper.drawRect(x + 10, cardY, x + w - 10, cardY + 1, 0xFF444444);
-
-                // Left: emblem
-                int ex = x + 20, ey = cardY + 15;
-                drawCircle(ex + 35, ey + 35, 30, 0x33555555);
-                String emblem = as.displayName == null ? "?" :
-                        as.displayName.substring(0, Math.min(3, as.displayName.length()));
-                PassFontUtil.drawCenteredString(emblem, ex + 35, ey + 32, 0xFF888888);
-
-                // Center: info
-                int ix = ex + 90;
-                PassFontUtil.drawStringWithShadow(
-                        PassFontUtil.truncateString(as.displayName, Math.max(80, w - 130)),
-                        ix, cardY + 12, 0xFFFFFFFF);
-                PassFontUtil.drawStringWithShadow(
-                        PassFontUtil.truncateString(as.subtitle, Math.max(80, w - 130)),
-                        ix, cardY + 28, 0xFFAAAAAA);
-                PassFontUtil.drawStringWithShadow("等级: " + as.playerLevel + "/" + as.maxLevel, ix, cardY + 46, 0xFFCCCCCC);
-                PassFontUtil.drawStringWithShadow("档位: " + PassText.tier(as.paidTier), ix + 140, cardY + 46, accentColor);
-                PassFontUtil.drawStringWithShadow("任务完成: " + as.tasksCompleted + "/" + as.totalTasks, ix, cardY + 62, 0xFFCCCCCC);
-
-                // Trophies
-                if (as.earnedTrophies != null && !as.earnedTrophies.isEmpty()) {
-                    PassFontUtil.drawStringWithShadow(
-                            PassFontUtil.truncateString(
-                                    "奖杯: " + String.join(" · ", as.earnedTrophies),
-                                    Math.max(80, w - 130)),
-                            ix, cardY + 78, primaryColor);
-                }
-
-                // Season dates
-                String dateRange = formatDate(as.startTimeMs) + " — " + formatDate(as.endTimeMs);
-                PassFontUtil.drawStringWithShadow(dateRange, ix, cardY + 94, 0xFF666666);
-
-                cardY += ch + 8;
-            }
-            disableUiScissor();
-            if (getArchiveMaxScroll() > 0) {
-                PassFontUtil.drawStringWithShadow("滚轮浏览归档", x + 12, y + h - 16, 0xFF666666);
-            }
-        } else {
-            // Placeholder
-            int cX = x + 20, cY = y + 40;
-            GuiHelper.drawRect(cX, cY, cX + 300, cY + 80, 0xFF1A1A1A);
-            GuiHelper.drawRect(cX, cY, cX + 300, cY + 1, 0xFF444444);
-            PassFontUtil.drawStringWithShadow("S1 故土回声 (进行中)", cX + 12, cY + 14, 0xFFCCCCCC);
-            PassFontUtil.drawStringWithShadow("赛季结束后将归档至此", cX + 12, cY + 34, 0xFF666666);
-            PassFontUtil.drawStringWithShadow("可查看: 奖杯、剧情回顾、赛季数据", cX + 12, cY + 52, 0xFF555555);
-        }
-
-        // Current season settlement status
-        if (snapshot != null && snapshot.seasonInfo != null && snapshot.seasonInfo.endTimeMs > 0) {
-            long rem = snapshot.seasonInfo.endTimeMs - System.currentTimeMillis();
-            int sy = y + h - 50;
-            if (rem <= 0) {
-                GuiHelper.drawRect(x + 10, sy - 4, x + w - 10, sy + 24, 0xFF332200);
-                PassFontUtil.drawCenteredString("赛季已结束，可结算赛季奖励", x + w / 2, sy + 6, primaryColor);
-            } else if (rem < 7L * 86400000L) {
-                PassFontUtil.drawStringWithShadow("赛季即将结束，剩余 " + formatRemainingTime(rem), x + 20, sy + 4, 0xFFAAAAAA);
-                PassFontUtil.drawStringWithShadow("赛季结束后可在归档中查看完整赛季记录", x + 20, sy + 20, 0xFF888888);
-            }
-        }
-    }
-
-    private String formatDate(long ms) {
-        java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy/MM/dd");
-        return sdf.format(new java.util.Date(ms));
-    }
-
-    private float getArchiveMaxScroll() {
-        int count = snapshot != null && snapshot.archiveSeasons != null
-                ? snapshot.archiveSeasons.size() : 0;
-        int available = Math.max(1, guiH - TOP_BAR_HEIGHT - 96);
-        return Math.max(0, count * 118 - available);
-    }
-
     // ─── Settlement Screen (P2) ────────────────────────────────
 
     private void drawSettlementScreen(int guiLeft, int guiTop) {
@@ -1268,10 +1215,10 @@ public class PassMainScreen extends GuiScreen {
         iy += 12;
         PassFontUtil.drawCenteredString("赛季奖励已结算，奖杯和称号已发放至账户。", sx + sw / 2, iy, 0xFFAAAAAA);
         iy += 20;
-        PassFontUtil.drawCenteredString("前往赛季归档查看完整记录", sx + sw / 2, iy, accentColor);
+        PassFontUtil.drawCenteredString("赛季记录已保存于服务端", sx + sw / 2, iy, accentColor);
 
         int btnY = sy + sh - 36;
-        GuiHelper.drawRect(sx + sw / 2 - 40, btnY, sx + sw / 2 + 40, btnY + 24, primaryColor);
+        drawActionButton(sx + sw / 2 - 40, btnY, 80, 24, primaryColor, 0xFFFFFFFF);
         PassFontUtil.drawCenteredString("关闭", sx + sw / 2, btnY + 7, 0xFF000000);
     }
 
@@ -1330,7 +1277,14 @@ public class PassMainScreen extends GuiScreen {
         int nX = gl, nY = gt + TOP_BAR_HEIGHT;
         for (int i = 0; i < TAB_LABELS.length; i++) {
             if (GuiHelper.isMouseInRect(mouseX, mouseY, nX, nY + 10 + i * 28, NAV_WIDTH, 18)) {
-                currentTab = i; handler.sendChangeTab(TAB_LABELS[i]); return;
+                if (currentTab != i) {
+                    tabFromPosition = tabSwitchAnim == null ? currentTab
+                            : tabFromPosition + (currentTab - tabFromPosition) * tabSwitchAnim.get("transition");
+                    currentTab = i;
+                    tabSwitchAnim = PassAnimation.tabSwitchEffect();
+                    handler.sendChangeTab(TAB_LABELS[i]);
+                }
+                return;
             }
         }
 
@@ -1413,8 +1367,9 @@ public class PassMainScreen extends GuiScreen {
         if (currentTab == TAB_TASKS) {
             int tx = gl + NAV_WIDTH, ty = gt + TOP_BAR_HEIGHT;
             for (int i = 0; i < TASK_CATEGORIES.length; i++) {
-                int cx = tx + 10 + (i < 3 ? i : i - 3) * 82;
-                int cy = ty + (i < 3 ? 6 : 22);
+                int columns = taskCategoryColumns();
+                int cx = tx + 10 + (i % columns) * 82;
+                int cy = ty + 6 + (i / columns) * 16;
                 if (GuiHelper.isMouseInRect(mouseX, mouseY, cx, cy, 70, 16)) {
                     taskCategory = i; taskScrollOffset = 0; taskScrollVelocity = 0; taskRenderOffset = 0; showHiddenTasks = false; return;
                 }
@@ -1435,17 +1390,21 @@ public class PassMainScreen extends GuiScreen {
 
             // Task goto buttons
             List<PassSnapshot.TrackedTask> filtered = buildFilteredTasks();
-            int sy = ty + 70 - (int) taskRenderOffset;
+            int listTop = taskListTop();
+            int sy = ty + listTop - (int) taskRenderOffset;
             for (int i = 0; i < filtered.size(); i++) {
                 PassSnapshot.TrackedTask t = filtered.get(i);
                 int tcy = sy + i * 48;
-                if (tcy < ty + 62 || tcy + 42 > ty + guiH - TOP_BAR_HEIGHT - 18) {
+                if (tcy < ty + listTop - 8 || tcy + 42 > ty + guiH - TOP_BAR_HEIGHT - 10) {
                     continue;
                 }
-                if (t.gotoAction != null && t.progress < t.targetValue) {
+                if ((t.manualClaim && !t.claimed && t.progress >= t.targetValue)
+                        || (t.gotoAction != null && t.progress < t.targetValue)) {
                     int gx = tx + 10 + (getContentWidth() - 20) - 70;
                     if (GuiHelper.isMouseInRect(mouseX, mouseY, gx, tcy + 4, 60, 14)) {
-                        handler.sendGotoAction(t.gotoAction); return;
+                        if (t.manualClaim && t.progress >= t.targetValue) handler.sendClaimTask(t.taskId);
+                        else handler.sendGotoAction(t.gotoAction);
+                        return;
                     }
                 }
             }
@@ -1526,9 +1485,6 @@ public class PassMainScreen extends GuiScreen {
                 taskScrollVelocity += impulse;
                 taskSpringBack = false;
                 taskLastScrollTime = System.currentTimeMillis();
-            } else if (currentTab == TAB_ARCHIVE) {
-                archiveScrollOffset += scroll > 0 ? -30f : 30f;
-                archiveScrollOffset = Math.max(0, Math.min(getArchiveMaxScroll(), archiveScrollOffset));
             }
             return;
         }
@@ -1579,7 +1535,7 @@ public class PassMainScreen extends GuiScreen {
             if (dt <= 0) dt = 0.05f;
             taskLastRenderTime = now;
             int taskCount = buildFilteredTasks().size();
-            float maxScroll = Math.max(0, taskCount * 48 - (guiH - TOP_BAR_HEIGHT - 80));
+            float maxScroll = Math.max(0, taskCount * 48 - (guiH - TOP_BAR_HEIGHT - taskListTop() - 10));
             if (taskSpringBack) {
                 float target = taskScrollOffset < 0 ? 0 : (taskScrollOffset > maxScroll ? maxScroll : taskScrollOffset);
                 float diff = target - taskScrollOffset;

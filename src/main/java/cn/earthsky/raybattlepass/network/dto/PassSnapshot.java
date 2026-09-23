@@ -112,6 +112,8 @@ public class PassSnapshot {
         public long endTimeMs;
         public boolean isHidden;
         public boolean isGuild;
+        public boolean manualClaim;
+        public boolean claimed;
     }
 
     public static class CurrencySummary {
