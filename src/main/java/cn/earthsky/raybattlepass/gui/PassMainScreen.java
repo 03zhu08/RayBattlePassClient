@@ -32,10 +32,8 @@ public class PassMainScreen extends GuiScreen {
 
     private int currentTab = 0;
     private static final int TAB_HOME = 0, TAB_REWARDS = 1, TAB_TASKS = 2;
-    private static final int TAB_CURRENCY = 3, TAB_PARTNERS = 4;
-
     private static final String[] TAB_LABELS = {
-        "首页", "奖励", "任务", "赛季币", "伙伴"
+        "首页", "奖励", "任务"
     };
 
     // Theme colors (from uiHints, with defaults)
@@ -49,6 +47,11 @@ public class PassMainScreen extends GuiScreen {
     private boolean rewardSpringBack;
     private long rewardLastScrollTime;
     private long rewardLastRenderTime;
+    private boolean rewardPointerDown;
+    private boolean rewardDragged;
+    private int rewardPointerStartX;
+    private int rewardPointerLastX;
+    private PassSnapshot.RewardCard pendingRewardCard;
 
     // Smooth scroll state - task list
     private float taskScrollOffset;
@@ -60,7 +63,7 @@ public class PassMainScreen extends GuiScreen {
 
     private int taskCategory = 0;
     private static final String[] TASK_CATEGORIES = {
-        "每日任务", "每周任务", "赛季任务", "限时任务", "公会协作", "已追踪"
+        "每日任务", "每周任务", "赛季任务"
     };
     private boolean showHiddenTasks;
     private int hiddenRevealIndex;
@@ -323,13 +326,12 @@ public class PassMainScreen extends GuiScreen {
 
         drawTopBar(guiLeft, guiTop);
         drawLeftNav(guiLeft, guiTop, uiMouseX, uiMouseY);
+        rightPanelSlide = AdaptiveLayout.nextPanelSlide(rightPanelSlide, rightPanelCollapsed);
 
         switch (currentTab) {
             case TAB_HOME:    drawHomeTab(guiLeft, guiTop); break;
             case TAB_REWARDS: drawRewardsTab(guiLeft, guiTop); break;
             case TAB_TASKS:   drawTasksTab(guiLeft, guiTop); break;
-            case TAB_CURRENCY:drawCurrencyTab(guiLeft, guiTop); break;
-            case TAB_PARTNERS:drawPartnersTab(guiLeft, guiTop); break;
         }
 
         if (tabSwitchAnim != null) {
@@ -373,6 +375,18 @@ public class PassMainScreen extends GuiScreen {
         GuiHelper.drawRect(x, y + TOP_BAR_HEIGHT - 1, x + w, y + TOP_BAR_HEIGHT, primaryColor);
         if (snapshot == null) return;
 
+        // A single full-width level progress indicator remains visible on every tab.
+        if (snapshot.playerState != null) {
+            PassSnapshot.PlayerState state = snapshot.playerState;
+            int amount = state.isMaxLevel ? state.overflowExp : state.exp;
+            int required = state.isMaxLevel ? state.overflowExpRequired : state.expToNextLevel;
+            float progress = required > 0 ? Math.max(0f, Math.min(1f, amount / (float) required)) : 0f;
+            int barX = x + 8, barW = Math.max(1, w - 16);
+            GuiHelper.drawRect(barX, y + 2, barX + barW, y + 6, 0xFF343434);
+            GuiHelper.drawRect(barX, y + 2, barX + Math.round(barW * progress), y + 6,
+                    state.isMaxLevel ? accentColor : primaryColor);
+        }
+
         if (compactLayout) {
             if (snapshot.seasonInfo != null) {
                 String seasonName = PassFontUtil.truncateString(
@@ -399,11 +413,6 @@ public class PassMainScreen extends GuiScreen {
                 int bx = x + w - claimW - 8;
                 drawActionButton(bx, y + 14, claimW, 18, primaryColor, 0xFFFFFFFF);
                 PassFontUtil.drawCenteredString(claim, bx + claimW / 2, y + 19, 0xFF000000);
-            } else if (snapshot.currencySummary != null) {
-                String currency = String.valueOf(snapshot.currencySummary.currentValue);
-                int currencyW = PassFontUtil.getStringWidth(currency);
-                PassFontUtil.drawStringWithShadow(
-                        currency, x + w - currencyW - 10, y + 20, accentColor);
             }
             return;
         }
@@ -430,23 +439,10 @@ public class PassMainScreen extends GuiScreen {
                 String ovStr = "循环宝箱 " + snapshot.playerState.overflowExp + "/"
                     + snapshot.playerState.overflowExpRequired;
                 PassFontUtil.drawStringWithShadow(ovStr, lx, y + 28, accentColor);
-                float op = snapshot.playerState.overflowExpRequired > 0
-                    ? (float) snapshot.playerState.overflowExp / snapshot.playerState.overflowExpRequired : 0;
-                GuiHelper.drawProgressBar(lx + 50, y + 18, 120, 8, Math.min(op, 1f), 0xFF333333, accentColor);
             } else {
                 String expStr = snapshot.playerState.exp + "/" + snapshot.playerState.expToNextLevel;
                 PassFontUtil.drawStringWithShadow(expStr, lx, y + 28, 0xFFAAAAAA);
-                float p = snapshot.playerState.expToNextLevel > 0
-                    ? (float) snapshot.playerState.exp / snapshot.playerState.expToNextLevel : 0;
-                GuiHelper.drawProgressBar(lx + 50, y + 18, 120, 8, p, 0xFF333333,
-                    levelUpAnim != null ? 0xFFFF6600 : primaryColor);
             }
-        }
-
-        if (snapshot.currencySummary != null) {
-            String cs = snapshot.currencySummary.displayName + " " + snapshot.currencySummary.currentValue;
-            int cw = PassFontUtil.getStringWidth(cs);
-            PassFontUtil.drawStringWithShadow(cs, x + w - cw - 100, y + 18, accentColor);
         }
 
         if (snapshot.playerState != null && snapshot.playerState.claimableCount > 0) {
@@ -489,7 +485,20 @@ public class PassMainScreen extends GuiScreen {
     }
 
     private boolean isHovered(int x, int y, int w, int h) {
-        return GuiHelper.isMouseInRect(hoverMouseX, hoverMouseY, x, y, w, h);
+        if (!GuiHelper.isMouseInRect(hoverMouseX, hoverMouseY, x, y, w, h)) return false;
+        return purchasePreviewOpen || selectedRewardCard != null || showSettlement
+                || !isPointCoveredByRightPanel(hoverMouseX, hoverMouseY);
+    }
+
+    private boolean isPointCoveredByRightPanel(int mouseX, int mouseY) {
+        int top = getGuiTop() + TOP_BAR_HEIGHT;
+        int height = guiH - TOP_BAR_HEIGHT;
+        int visibleW = getRenderedRightPanelWidth();
+        int panelX = getGuiLeft() + guiW - visibleW;
+        int arrowX = panelX - 16;
+        int arrowY = top + height / 2 - 12;
+        return (visibleW > 0 && GuiHelper.isMouseInRect(mouseX, mouseY, panelX, top, visibleW, height))
+                || GuiHelper.isMouseInRect(mouseX, mouseY, arrowX, arrowY, 16, 24);
     }
 
     private void drawActionButton(int x, int y, int w, int h, int color, int highlight) {
@@ -501,12 +510,14 @@ public class PassMainScreen extends GuiScreen {
         }
     }
 
-    private int taskCategoryColumns() {
-        return getContentWidth() < 270 ? 2 : 3;
+    private int taskListTop() {
+        return 75;
     }
 
-    private int taskListTop() {
-        return taskCategoryColumns() == 2 ? 86 : 70;
+    private int[] taskCategoryBounds(int x, int y, int w, int index) {
+        int gap = 6;
+        int buttonW = Math.max(1, (w - 20 - gap * 2) / 3);
+        return new int[] {x + 10 + index * (buttonW + gap), y + 7, buttonW, 26};
     }
 
     // ─── Right Panel ───────────────────────────────────────────
@@ -539,8 +550,6 @@ public class PassMainScreen extends GuiScreen {
     private int getSettlementHeight() { return Math.min(380, guiH - 20); }
 
     private void drawRightPanel(int guiLeft, int guiTop, int mouseX, int mouseY) {
-        rightPanelSlide = AdaptiveLayout.nextPanelSlide(rightPanelSlide, rightPanelCollapsed);
-
         int panelW = getRightPanelMaximumWidth();
         int visibleW = getRenderedRightPanelWidth();
         int x = guiLeft + guiW - visibleW, y = guiTop + TOP_BAR_HEIGHT;
@@ -587,6 +596,15 @@ public class PassMainScreen extends GuiScreen {
             PassFontUtil.drawStringWithShadow("循环宝箱: " + snapshot.playerState.overflowCount,
                 x + 10, ty, accentColor);
             ty += 14;
+            if (snapshot.playerState.overflowCount > 0) {
+                boolean hovered = GuiHelper.isMouseInRect(mouseX, mouseY, x + 8, ty, panelW - 16, 20);
+                GuiHelper.drawRect(x + 8, ty, x + panelW - 8, ty + 20,
+                        hovered ? 0xFF3B5750 : 0xFF283833);
+                if (hovered) GuiHelper.drawRect(x + 8, ty, x + panelW - 8, ty + 1, accentColor);
+                PassFontUtil.drawCenteredString("领取循环宝箱", x + panelW / 2, ty + 5,
+                        hovered ? 0xFFFFFFFF : accentColor);
+                ty += 26;
+            }
         }
 
         ty += 10;
@@ -725,16 +743,50 @@ public class PassMainScreen extends GuiScreen {
             }
         }
 
+        int[][] actions = homeActionBounds(x, y, w, h);
+        drawHomeAction(actions[0], "查看奖励", primaryColor, true);
+        drawHomeAction(actions[1], "查看任务", accentColor, false);
+
         int recY = y + h - 34;
-        PassFontUtil.drawStringWithShadow("今日推荐", x + 10, recY, primaryColor);
+        PassFontUtil.drawStringWithShadow("任务进度", x + 10, recY, primaryColor);
+        String progressText = snapshot != null && snapshot.taskSummary != null
+                ? "每日 " + snapshot.taskSummary.dailyCompleted + "/" + snapshot.taskSummary.dailyTotal
+                    + "  每周 " + snapshot.taskSummary.weeklyCompleted + "/" + snapshot.taskSummary.weeklyTotal
+                : "每日、每周与赛季任务自动接取";
         PassFontUtil.drawStringWithShadow(
                 PassFontUtil.truncateString(
-                        "肉鸽玩法1次 / 派遣伙伴远征 / 岛屿入侵",
-                        Math.max(40, w - 90)),
+                        progressText, Math.max(40, w - 90)),
                 x + 80, recY, 0xFFAAAAAA);
 
         float cf = openAnim != null ? openAnim.get("contentFade") : 1f;
         if (cf < 1f) GuiHelper.drawRect(x, y, x + w, y + h, ((int) ((1 - cf) * 200) << 24) | 0x000000);
+    }
+
+    private int[][] homeActionBounds(int x, int y, int w, int h) {
+        int cx = x + w / 2, cy = y + h / 2;
+        int radius = Math.max(24, Math.min(100, Math.min(w / 2 - 18, h / 2 - 38)));
+        int buttonW = Math.max(38, Math.min(118, w / 2 - radius - 10));
+        int buttonH = Math.min(76, Math.max(54, h - 90));
+        return new int[][] {
+                {cx - radius - buttonW - 6, cy - buttonH / 2, buttonW, buttonH},
+                {cx + radius + 6, cy - buttonH / 2, buttonW, buttonH}
+        };
+    }
+
+    private void drawHomeAction(int[] bounds, String label, int color, boolean reward) {
+        int x = bounds[0], y = bounds[1], w = bounds[2], h = bounds[3];
+        boolean hovered = isHovered(x, y, w, h);
+        GuiHelper.drawRect(x - 2, y - 2, x + w + 2, y + h + 2, hovered ? color : 0x55444444);
+        GuiHelper.drawRect(x, y, x + w, y + h, hovered ? 0xFF30352D : 0xEE1A1D1B);
+        GuiHelper.drawRect(x + 3, y + 3, x + w - 3, y + 4, color);
+        GuiHelper.drawRect(x + 3, y + h - 4, x + w - 3, y + h - 3, color);
+        int iconY = y + Math.max(18, h / 3);
+        drawDiamond(x + w / 2, iconY, hovered ? 14 : 12, hovered ? color : 0x88333333);
+        drawDiamond(x + w / 2, iconY, 5, reward ? primaryColor : accentColor);
+        PassFontUtil.drawCenteredString(label, x + w / 2, y + h - 22,
+                hovered ? 0xFFFFFFFF : color);
+        if (w >= 82) PassFontUtil.drawCenteredString(hovered ? "点击进入  >" : "点击进入",
+                x + w / 2, y + h - 12, hovered ? 0xFFEEEEEE : 0xFF777777);
     }
 
     private void drawCircle(int cx, int cy, int radius, int color) {
@@ -825,7 +877,8 @@ public class PassMainScreen extends GuiScreen {
         }
 
         disableUiScissor();
-        PassFontUtil.drawCenteredString("滚轮浏览  |  左键详情  |  右键领取", x + w / 2, y + h - 14, 0xFF666666);
+        GuiHelper.drawRect(x, y + h - 22, x + w, y + h, PANEL_BG);
+        PassFontUtil.drawCenteredString("滚轮或左键拖动  |  单击详情  |  右键领取", x + w / 2, y + h - 14, 0xFF666666);
     }
 
     private PassSnapshot.RewardCard findCardForTrackLevel(String track, int level) {
@@ -844,7 +897,8 @@ public class PassMainScreen extends GuiScreen {
         else if ("rare".equals(card.rarity)) borderColor = accentColor;
         if ("claimable".equals(card.status)) borderColor = primaryColor;
 
-        boolean hovered = isHovered(cx, cy, cw, ch);
+        boolean hovered = !rewardDragged && isRewardTrackPoint(hoverMouseX, hoverMouseY)
+                && isHovered(cx, cy, cw, ch);
         GuiHelper.drawRect(cx, cy, cx + cw, cy + ch, hovered ? 0xEE303030 : 0xCC222222);
         if (hovered) borderColor = 0xFFFFFFFF;
         GuiHelper.drawRect(cx, cy, cx + cw, cy + 1, borderColor);
@@ -941,7 +995,7 @@ public class PassMainScreen extends GuiScreen {
         switch (s) { case "claimed": return "已领取"; case "claimable": return "可领取"; case "locked": return "未解锁"; default: return "未知状态"; }
     }
 
-    // ─── Tasks Tab (P2: limited/guild/hidden) ──────────────────
+    // ─── Tasks Tab ──────────────────────────────────────────────
 
     private void drawTasksTab(int guiLeft, int guiTop) {
         int x = guiLeft + NAV_WIDTH, y = guiTop + TOP_BAR_HEIGHT;
@@ -949,53 +1003,39 @@ public class PassMainScreen extends GuiScreen {
         int h = guiH - TOP_BAR_HEIGHT;
         GuiHelper.drawRect(x, y, x + w, y + h, PANEL_BG);
 
-        // Use two columns in narrow layouts so the hidden toggle stays clickable.
-        int columns = taskCategoryColumns();
         for (int i = 0; i < TASK_CATEGORIES.length; i++) {
-            int cx = x + 10 + (i % columns) * 82;
-            int cy = y + 6 + (i / columns) * 16;
-            boolean hovered = isHovered(cx, cy, 70, 16);
-            if (hovered) GuiHelper.drawRect(cx, cy, cx + 70, cy + 16, 0x33FFFFFF);
-            int color = i == taskCategory ? primaryColor : hovered ? 0xFFFFFFFF : 0xFF888888;
-            PassFontUtil.drawStringWithShadow(TASK_CATEGORIES[i], cx, cy + 2, color);
+            int[] b = taskCategoryBounds(x, y, w, i);
+            boolean selected = i == taskCategory;
+            boolean hovered = isHovered(b[0], b[1], b[2], b[3]);
+            int border = selected ? primaryColor : hovered ? accentColor : 0xFF555555;
+            int background = selected ? 0xDD403514 : hovered ? 0xDD30383A : 0xCC222222;
+            GuiHelper.drawRect(b[0], b[1], b[0] + b[2], b[1] + b[3], border);
+            GuiHelper.drawRect(b[0] + 1, b[1] + 1, b[0] + b[2] - 1, b[1] + b[3] - 1, background);
+            if (selected || hovered) GuiHelper.drawRect(b[0] + 3, b[1] + 3,
+                    b[0] + b[2] - 3, b[1] + 5, border);
+            PassFontUtil.drawCenteredString(TASK_CATEGORIES[i], b[0] + b[2] / 2, b[1] + 10,
+                    selected ? 0xFFFFFFFF : hovered ? 0xFFFFFFFF : 0xFFAAAAAA);
         }
         // Hidden task toggle
         {
-            boolean hovered = isHovered(x + w - 50, y + 6, 40, 16);
-            if (hovered) GuiHelper.drawRect(x + w - 50, y + 6, x + w - 10, y + 22, 0x33FFFFFF);
+            boolean hovered = isHovered(x + w - 50, y + 40, 40, 16);
+            if (hovered) GuiHelper.drawRect(x + w - 50, y + 40, x + w - 10, y + 56, 0x33FFFFFF);
             int color = showHiddenTasks ? 0xFFAA44FF : hovered ? 0xFFFFFFFF : 0xFF555555;
-            PassFontUtil.drawStringWithShadow("隐藏", x + w - 50, y + 8, color);
+            PassFontUtil.drawStringWithShadow("隐藏", x + w - 50, y + 42, color);
         }
         int listTop = taskListTop();
-        GuiHelper.drawHorizontalLine(x, x + w, y + listTop - 30, 0xFF444444);
+        GuiHelper.drawHorizontalLine(x, x + w, y + listTop - 12, 0xFF444444);
 
         if (snapshot != null && snapshot.taskSummary != null) {
             String sum = "每日 " + snapshot.taskSummary.dailyCompleted + "/" + snapshot.taskSummary.dailyTotal
                 + "  每周 " + snapshot.taskSummary.weeklyCompleted + "/" + snapshot.taskSummary.weeklyTotal
-                + "  赛季 " + snapshot.taskSummary.seasonCompleted + "/" + snapshot.taskSummary.seasonTotal
-                + "  公会 " + snapshot.taskSummary.guildCompleted + "/" + snapshot.taskSummary.guildTotal;
+                + "  赛季 " + snapshot.taskSummary.seasonCompleted + "/" + snapshot.taskSummary.seasonTotal;
             PassFontUtil.drawStringWithShadow(
-                    PassFontUtil.truncateString(sum, Math.max(80, w - 20)),
-                    x + 10, y + listTop - 24, 0xFFAAAAAA);
+                    PassFontUtil.truncateString(sum, Math.max(80, w - 70)),
+                    x + 10, y + 43, 0xFFAAAAAA);
         }
 
-        // Collect tasks
-        List<PassSnapshot.TrackedTask> filtered = new ArrayList<>();
-        if (showHiddenTasks && snapshot != null && snapshot.hiddenTasks != null) {
-            // Show hidden tasks (revealed one by one)
-            for (int i = 0; i <= hiddenRevealIndex && i < snapshot.hiddenTasks.size(); i++)
-                filtered.add(snapshot.hiddenTasks.get(i));
-        } else if (snapshot != null && snapshot.trackedTasks != null) {
-            String gf = null;
-            switch (taskCategory) {
-                case 0: gf = "daily"; break; case 1: gf = "weekly"; break;
-                case 2: gf = "season"; break; case 3: gf = "limited"; break;
-                case 4: gf = "guild"; break;
-            }
-            for (PassSnapshot.TrackedTask t : snapshot.trackedTasks) {
-                if (gf == null || gf.equals(t.group)) filtered.add(t);
-            }
-        }
+        List<PassSnapshot.TrackedTask> filtered = buildFilteredTasks();
 
         int sy = y + listTop - (int) taskRenderOffset;
         enableUiScissor(x, y + listTop - 8, w, Math.max(0, h - listTop - 10));
@@ -1006,7 +1046,8 @@ public class PassMainScreen extends GuiScreen {
             drawTaskCard(x + 10, ty, w - 20, 42, t);
         }
         disableUiScissor();
-        PassFontUtil.drawCenteredString("滚轮滚动  |  点击分类切换  |  隐藏任务需触发揭示", x + w / 2, y + h - 14, 0xFF666666);
+        GuiHelper.drawRect(x, y + h - 22, x + w, y + h, PANEL_BG);
+        PassFontUtil.drawCenteredString("任务自动接取  |  完成后手动领取", x + w / 2, y + h - 14, 0xFF666666);
     }
 
     private void drawTaskCard(int cx, int cy, int cw, int ch, PassSnapshot.TrackedTask t) {
@@ -1014,21 +1055,14 @@ public class PassMainScreen extends GuiScreen {
         GuiHelper.drawRect(cx, cy, cx + cw, cy + ch, bg);
         GuiHelper.drawRect(cx, cy, cx + cw, cy + 1, t.isLimited ? accentColor : 0xFF444444);
 
-        // Badge: limited / guild / hidden
+        // Hidden legacy tasks retain their reveal badge; regular quests are auto-started.
         int bx = cx + 6;
-        if (t.isLimited) {
-            String rem = formatLimitedRemaining(t.endTimeMs - System.currentTimeMillis());
-            PassFontUtil.drawStringWithShadow("限时 " + rem, bx, cy + 4, accentColor);
-            bx += 70;
-        } else if (t.isGuild) {
-            PassFontUtil.drawStringWithShadow("公会", bx, cy + 4, 0xFF88AA88);
-            bx += 34;
-        } else if (t.isHidden) {
+        if (t.isHidden) {
             PassFontUtil.drawStringWithShadow("隐藏", bx, cy + 4, 0xFFAA44FF);
             bx += 34;
         }
 
-        PassFontUtil.drawStringWithShadow(t.title, bx, cy + 4,
+        PassFontUtil.drawStringWithShadow(PassFontUtil.truncateString(t.title, Math.max(20, cx + cw - bx - 76)), bx, cy + 4,
             t.progress >= t.targetValue ? 0xFF55AA55 : 0xFFCCCCCC);
 
         float pct = t.targetValue > 0 ? (float) t.progress / t.targetValue : 0;
@@ -1051,127 +1085,6 @@ public class PassMainScreen extends GuiScreen {
             drawActionButton(cx + cw - 70, cy + 4, 60, 14, 0xFF333333, primaryColor);
             PassFontUtil.drawCenteredString("前往", cx + cw - 40, cy + 6,
                     isHovered(cx + cw - 70, cy + 4, 60, 14) ? 0xFFFFFFFF : primaryColor);
-        }
-    }
-
-    private String formatLimitedRemaining(long ms) {
-        if (ms <= 0) return "已结束";
-        long h = ms / 3600000L, m = (ms % 3600000L) / 60000;
-        if (h > 24) return (h / 24) + "天";
-        return h + "小时" + m + "分钟";
-    }
-
-    // ─── Currency Tab ──────────────────────────────────────────
-
-    private void drawCurrencyTab(int guiLeft, int guiTop) {
-        int x = guiLeft + NAV_WIDTH, y = guiTop + TOP_BAR_HEIGHT;
-        int w = getContentWidth();
-        int h = guiH - TOP_BAR_HEIGHT;
-        GuiHelper.drawRect(x, y, x + w, y + h, PANEL_BG);
-        PassFontUtil.drawStringWithShadow("赛季币", x + 10, y + 10, primaryColor);
-
-        if (snapshot != null && snapshot.currencySummary != null) {
-            PassSnapshot.CurrencySummary cs = snapshot.currencySummary;
-            int cardX = x + 20, cardY = y + 40;
-            GuiHelper.drawRect(cardX, cardY, cardX + 200, cardY + 100, 0xFF1A1A1A);
-            GuiHelper.drawRect(cardX, cardY, cardX + 200, cardY + 1, accentColor);
-            GuiHelper.drawRect(cardX, cardY + 99, cardX + 200, cardY + 100, accentColor);
-            PassFontUtil.drawStringWithShadow(cs.displayName, cardX + 10, cardY + 12, 0xFFCCCCCC);
-            PassFontUtil.drawStringWithShadow(String.format("%,d", cs.currentValue), cardX + 10, cardY + 46, 0xFFFFFFFF);
-
-            int iy = y + 40;
-            int infoWidth = Math.max(80, w - 250);
-            PassFontUtil.drawStringWithShadow(PassFontUtil.truncateString(
-                "来源: " + PassText.provider(cs.provider), infoWidth), x + 240, iy, 0xFF888888); iy += 20;
-            PassFontUtil.drawStringWithShadow(PassFontUtil.truncateString(
-                "同步方式: 服务端自动同步", infoWidth), x + 240, iy, 0xFF888888); iy += 20;
-            PassFontUtil.drawStringWithShadow(PassFontUtil.truncateString(
-                "刷新间隔: " + cs.refreshIntervalTicks + " 游戏刻", infoWidth), x + 240, iy, 0xFF888888);
-            PassFontUtil.drawStringWithShadow(
-                    PassFontUtil.truncateString(
-                            "赛季币由服务端数据接口提供，客户端只负责显示。",
-                            Math.max(80, w - 40)),
-                    x + 20, y + 160, 0xFF666666);
-
-            // Overflow box info
-            if (snapshot.playerState != null && snapshot.playerState.isMaxLevel) {
-                PassFontUtil.drawStringWithShadow("满级循环宝箱", x + 20, y + 190, accentColor);
-                String ovInfo = "每 " + snapshot.playerState.overflowExpRequired + " 经验获得1个循环宝箱";
-                PassFontUtil.drawStringWithShadow(ovInfo, x + 20, y + 208, 0xFFAAAAAA);
-                String ovCount = "已获得: " + snapshot.playerState.overflowCount + " 个";
-                PassFontUtil.drawStringWithShadow(ovCount, x + 20, y + 224, 0xFFCCCCCC);
-                if (snapshot.playerState.overflowCount > 0 && h >= 285) {
-                    drawActionButton(x + 20, y + 246, 110, 24, primaryColor, 0xFFFFFFFF);
-                    PassFontUtil.drawCenteredString("领取循环宝箱", x + 75, y + 253, 0xFF000000);
-                }
-            }
-        } else {
-            PassFontUtil.drawStringWithShadow("赛季币信息不可用，等待服务端下发数据...", x + 20, y + 40, 0xFF888888);
-        }
-    }
-
-    // ─── Partners Tab ──────────────────────────────────────────
-
-    private void drawPartnersTab(int guiLeft, int guiTop) {
-        int x = guiLeft + NAV_WIDTH, y = guiTop + TOP_BAR_HEIGHT;
-        int w = getContentWidth();
-        int h = guiH - TOP_BAR_HEIGHT;
-        GuiHelper.drawRect(x, y, x + w, y + h, PANEL_BG);
-        PassFontUtil.drawStringWithShadow("伙伴特辑", x + 10, y + 10, primaryColor);
-        PassFontUtil.drawStringWithShadow("S1 故土回声 · 推荐伙伴", x + 10, y + 28, 0xFFAAAAAA);
-
-        if (snapshot != null && snapshot.seasonInfo != null && snapshot.seasonInfo.featuredPartnerIds != null
-            && !snapshot.seasonInfo.featuredPartnerIds.isEmpty()) {
-            String pid = snapshot.seasonInfo.featuredPartnerIds.get(0);
-
-            int px = x + 20, py = y + 50, pw = 180, ph = Math.min(260, h - 70);
-            GuiHelper.drawRect(px, py, px + pw, py + ph, 0xFF0F0F0F);
-            GuiHelper.drawRect(px, py, px + pw, py + 1, primaryColor);
-            GuiHelper.drawRect(px + pw - 1, py, px + pw, py + ph, primaryColor);
-            drawCircle(px + pw / 2, py + ph / 2 - 20, 60, 0x33555555);
-            drawCircle(px + pw / 2, py + ph / 2 - 20, 40, 0x22444444);
-            drawDiamond(px + pw / 2, py + ph / 2 - 20, 24, primaryColor & 0x66FFFFFF);
-            PassFontUtil.drawCenteredString(pid, px + pw / 2, py + ph - 30, 0xFF888888);
-
-            int ix = x + 215, iy = y + 50;
-            int infoW = Math.max(180, w - 225);
-            GuiHelper.drawRect(ix, iy, ix + infoW, iy + ph, PANEL_BG);
-            PassFontUtil.drawStringWithShadow("测试伙伴", ix + 12, iy + 12, 0xFFFFFFFF);
-            PassFontUtil.drawStringWithShadow("定位: 医疗 / 支援", ix + 12, iy + 32, accentColor);
-            PassFontUtil.drawStringWithShadow("阵营: 地球训练区", ix + 12, iy + 48, 0xFFCCCCCC);
-            iy += 68;
-            for (String line : new String[]{
-                "来自地球训练区的医疗支援专", "家，精通战场急救与远程护盾",
-                "技术。在肉鸽玩法和爬塔环境", "中提供持续恢复与减伤辅助。"}) {
-                PassFontUtil.drawStringWithShadow(line, ix + 12, iy, 0xFF888888); iy += 14;
-            }
-            iy += 10;
-            for (String s : new String[]{
-                "推荐玩法: 肉鸽玩法 / 爬塔 / 岛屿入侵",
-                "推荐芯片: 生命回复 / 护盾增强",
-                "推荐队友: 星环猎手 / 故土勘探员",
-                "获取方式: 通行证10级进阶线",
-                "碎片进度: 解锁赛季限定皮肤"}) {
-                PassFontUtil.drawStringWithShadow(s, ix + 12, iy, 0xFFAAAAAA); iy += 14;
-            }
-
-            if (h >= 410) {
-                int sy = y + 330;
-                PassFontUtil.drawStringWithShadow("外观与特效", x + 20, sy - 12, primaryColor);
-                String[] previews = {"默认外观", "赛季皮肤", "战术待命动作", "医疗光束特效"};
-                int previewW = Math.max(70, Math.min(110, (w - 50) / previews.length));
-                for (int i = 0; i < previews.length; i++) {
-                    int spx = x + 20 + i * (previewW + 10);
-                    GuiHelper.drawRect(spx, sy, spx + previewW, sy + 50, 0xFF1A1A1A);
-                    GuiHelper.drawRect(spx, sy, spx + previewW, sy + 1, 0xFF444444);
-                    PassFontUtil.drawCenteredString(
-                            PassFontUtil.truncateString(previews[i], previewW - 6),
-                            spx + previewW / 2, sy + 20, 0xFF888888);
-                }
-            }
-        } else {
-            PassFontUtil.drawStringWithShadow("暂无本赛季伙伴信息", x + 20, y + 50, 0xFF888888);
-            PassFontUtil.drawStringWithShadow("等待服务端下发赛季伙伴数据...", x + 20, y + 70, 0xFF666666);
         }
     }
 
@@ -1277,13 +1190,7 @@ public class PassMainScreen extends GuiScreen {
         int nX = gl, nY = gt + TOP_BAR_HEIGHT;
         for (int i = 0; i < TAB_LABELS.length; i++) {
             if (GuiHelper.isMouseInRect(mouseX, mouseY, nX, nY + 10 + i * 28, NAV_WIDTH, 18)) {
-                if (currentTab != i) {
-                    tabFromPosition = tabSwitchAnim == null ? currentTab
-                            : tabFromPosition + (currentTab - tabFromPosition) * tabSwitchAnim.get("transition");
-                    currentTab = i;
-                    tabSwitchAnim = PassAnimation.tabSwitchEffect();
-                    handler.sendChangeTab(TAB_LABELS[i]);
-                }
+                changeTab(i);
                 return;
             }
         }
@@ -1306,7 +1213,17 @@ public class PassMainScreen extends GuiScreen {
         if (snapshot != null && snapshot.keyRewards != null) btnY += snapshot.keyRewards.size() * 14;
         btnY += 10 + 14;
         if (snapshot != null && snapshot.playerState != null && snapshot.playerState.claimableCount > 0) btnY += 14;
-        if (snapshot != null && snapshot.playerState != null && snapshot.playerState.isMaxLevel) btnY += 14;
+        if (snapshot != null && snapshot.playerState != null && snapshot.playerState.isMaxLevel) {
+            btnY += 14;
+            if (snapshot.playerState.overflowCount > 0) {
+                if (mouseButton == 0 && GuiHelper.isMouseInRect(mouseX, mouseY,
+                        rpX + 8, btnY, renderedRightWidth - 16, 20)) {
+                    handler.sendClaimOverflow();
+                    return;
+                }
+                btnY += 26;
+            }
+        }
         btnY += 10 + 14 + 24;
 
         if (mouseButton == 0) {
@@ -1327,14 +1244,8 @@ public class PassMainScreen extends GuiScreen {
         }
         }
 
-        if (compactLayout && getRenderedRightPanelWidth() > 0) {
-            int panelWidth = getRenderedRightPanelWidth();
-            if (GuiHelper.isMouseInRect(
-                    mouseX, mouseY, gl + guiW - panelWidth,
-                    gt + TOP_BAR_HEIGHT, panelWidth, guiH - TOP_BAR_HEIGHT)) {
-                return;
-            }
-        }
+        // The slide-out panel and its arrow are above the page, at every layout size.
+        if (isPointCoveredByRightPanel(mouseX, mouseY)) return;
 
         // Claim all
         if (snapshot != null && snapshot.playerState != null && snapshot.playerState.claimableCount > 0) {
@@ -1351,14 +1262,17 @@ public class PassMainScreen extends GuiScreen {
             }
         }
 
-        // Task category tabs + hidden toggle
-        if (currentTab == TAB_CURRENCY && snapshot != null && snapshot.playerState != null
-                && snapshot.playerState.isMaxLevel && snapshot.playerState.overflowCount > 0) {
-            int cx = gl + NAV_WIDTH;
-            int cy = gt + TOP_BAR_HEIGHT;
-            int contentHeight = guiH - TOP_BAR_HEIGHT;
-            if (contentHeight >= 285 && GuiHelper.isMouseInRect(mouseX, mouseY, cx + 20, cy + 246, 110, 24)) {
-                handler.sendClaimOverflow();
+        if (currentTab == TAB_HOME && mouseButton == 0) {
+            int[][] actions = homeActionBounds(gl + NAV_WIDTH, gt + TOP_BAR_HEIGHT,
+                    getContentWidth(), guiH - TOP_BAR_HEIGHT);
+            if (GuiHelper.isMouseInRect(mouseX, mouseY,
+                    actions[0][0], actions[0][1], actions[0][2], actions[0][3])) {
+                changeTab(TAB_REWARDS);
+                return;
+            }
+            if (GuiHelper.isMouseInRect(mouseX, mouseY,
+                    actions[1][0], actions[1][1], actions[1][2], actions[1][3])) {
+                changeTab(TAB_TASKS);
                 return;
             }
         }
@@ -1367,15 +1281,13 @@ public class PassMainScreen extends GuiScreen {
         if (currentTab == TAB_TASKS) {
             int tx = gl + NAV_WIDTH, ty = gt + TOP_BAR_HEIGHT;
             for (int i = 0; i < TASK_CATEGORIES.length; i++) {
-                int columns = taskCategoryColumns();
-                int cx = tx + 10 + (i % columns) * 82;
-                int cy = ty + 6 + (i / columns) * 16;
-                if (GuiHelper.isMouseInRect(mouseX, mouseY, cx, cy, 70, 16)) {
+                int[] b = taskCategoryBounds(tx, ty, getContentWidth(), i);
+                if (GuiHelper.isMouseInRect(mouseX, mouseY, b[0], b[1], b[2], b[3])) {
                     taskCategory = i; taskScrollOffset = 0; taskScrollVelocity = 0; taskRenderOffset = 0; showHiddenTasks = false; return;
                 }
             }
             // Hidden toggle
-            if (GuiHelper.isMouseInRect(mouseX, mouseY, tx + (getContentWidth()) - 50, ty + 6, 40, 16)) {
+            if (GuiHelper.isMouseInRect(mouseX, mouseY, tx + getContentWidth() - 50, ty + 40, 40, 16)) {
                 showHiddenTasks = !showHiddenTasks;
                 if (showHiddenTasks && hiddenRevealAnim == null) {
                     hiddenRevealIndex = 0;
@@ -1395,7 +1307,7 @@ public class PassMainScreen extends GuiScreen {
             for (int i = 0; i < filtered.size(); i++) {
                 PassSnapshot.TrackedTask t = filtered.get(i);
                 int tcy = sy + i * 48;
-                if (tcy < ty + listTop - 8 || tcy + 42 > ty + guiH - TOP_BAR_HEIGHT - 10) {
+                if (tcy < ty + listTop - 8 || tcy + 42 > ty + guiH - TOP_BAR_HEIGHT - 22) {
                     continue;
                 }
                 if ((t.manualClaim && !t.claimed && t.progress >= t.targetValue)
@@ -1410,47 +1322,94 @@ public class PassMainScreen extends GuiScreen {
             }
         }
 
-        // Reward tab card clicks
-        if (currentTab == TAB_REWARDS && snapshot != null && snapshot.rewardWindow != null) {
-            int labelW = 58;
-            int cardW = 72;
-            int cardSpacing = cardW + 4;
-            int rx = gl + NAV_WIDTH;
-            int ry = gt + TOP_BAR_HEIGHT;
-            int rw = getContentWidth();
-            int rh = guiH - TOP_BAR_HEIGHT;
-            int trackAreaX = rx + labelW;
-            int trackAreaW = rw - labelW - 10;
-            int rowH = (rh - 40) / 3;
-            int cardH = Math.min(88, rowH - 8);
-            String[] tracks = {"free", "advanced", "legendary"};
-
-            int maxLevel = 1;
-            for (PassSnapshot.RewardCard card : snapshot.rewardWindow) {
-                if (card.level > maxLevel) maxLevel = card.level;
+        // Left press is deferred until release so a card can be dragged without opening it.
+        if (currentTab == TAB_REWARDS && isRewardTrackPoint(mouseX, mouseY)) {
+            PassSnapshot.RewardCard card = rewardCardAt(mouseX, mouseY);
+            if (mouseButton == 1 && card != null && "claimable".equals(card.status)) {
+                handler.sendClaimReward(card.rewardId);
+                return;
             }
-            float pixelOffset = rewardRenderOffset;
-            int firstVisibleLevel = Math.max(1, (int)(pixelOffset / cardSpacing) + 1);
-            int visibleCount = trackAreaW / cardSpacing + 2;
-            int lastVisibleLevel = Math.min(maxLevel, firstVisibleLevel + visibleCount);
-
-            for (int r = 0; r < 3; r++) {
-                int rowY = ry + 28 + r * rowH;
-                for (int lv = firstVisibleLevel; lv <= lastVisibleLevel; lv++) {
-                    int cx = (int)(trackAreaX + (lv - 1) * cardSpacing - pixelOffset);
-                    if (cx + cardW < trackAreaX || cx > trackAreaX + trackAreaW) continue;
-                    int cy = rowY + (rowH - cardH) / 2;
-                    if (GuiHelper.isMouseInRect(mouseX, mouseY, cx, cy, cardW, cardH)) {
-                        PassSnapshot.RewardCard card = findCardForTrackLevel(tracks[r], lv);
-                        if (card != null) {
-                            if (mouseButton == 1 && "claimable".equals(card.status)) handler.sendClaimReward(card.rewardId);
-                            else if (mouseButton == 0) { selectedRewardCard = card; handler.sendRequestRewardPreview(card.rewardId); }
-                            return;
-                        }
-                    }
-                }
+            if (mouseButton == 0) {
+                rewardPointerDown = true;
+                rewardDragged = false;
+                rewardPointerStartX = mouseX;
+                rewardPointerLastX = mouseX;
+                pendingRewardCard = card;
+                rewardScrollVelocity = 0;
+                return;
             }
         }
+    }
+
+    private void changeTab(int tab) {
+        if (currentTab == tab) return;
+        tabFromPosition = tabSwitchAnim == null ? currentTab
+                : tabFromPosition + (currentTab - tabFromPosition) * tabSwitchAnim.get("transition");
+        currentTab = tab;
+        tabSwitchAnim = PassAnimation.tabSwitchEffect();
+        rewardPointerDown = false;
+        rewardDragged = false;
+        pendingRewardCard = null;
+        handler.sendChangeTab(TAB_LABELS[tab]);
+    }
+
+    private boolean isRewardTrackPoint(int mouseX, int mouseY) {
+        if (snapshot == null || snapshot.rewardWindow == null || isPointCoveredByRightPanel(mouseX, mouseY))
+            return false;
+        int x = getGuiLeft() + NAV_WIDTH + 58;
+        int y = getGuiTop() + TOP_BAR_HEIGHT + 28;
+        return GuiHelper.isMouseInRect(mouseX, mouseY, x, y,
+                Math.max(0, getContentWidth() - 68), Math.max(0, guiH - TOP_BAR_HEIGHT - 50));
+    }
+
+    private PassSnapshot.RewardCard rewardCardAt(int mouseX, int mouseY) {
+        if (!isRewardTrackPoint(mouseX, mouseY)) return null;
+        int rx = getGuiLeft() + NAV_WIDTH, ry = getGuiTop() + TOP_BAR_HEIGHT;
+        int rowH = (guiH - TOP_BAR_HEIGHT - 40) / 3;
+        int cardH = Math.min(88, rowH - 8);
+        int trackX = rx + 58;
+        String[] tracks = {"free", "advanced", "legendary"};
+        for (int row = 0; row < 3; row++) {
+            int cardY = ry + 28 + row * rowH + (rowH - cardH) / 2;
+            if (!GuiHelper.isMouseInRect(mouseX, mouseY, trackX, cardY,
+                    getContentWidth() - 68, cardH)) continue;
+            for (PassSnapshot.RewardCard card : snapshot.rewardWindow) {
+                if (!tracks[row].equals(card.track)) continue;
+                int cardX = (int) (trackX + (card.level - 1) * 76 - rewardRenderOffset);
+                if (GuiHelper.isMouseInRect(mouseX, mouseY, cardX, cardY, 72, cardH)) return card;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    protected void mouseClickMove(int mouseX, int mouseY, int clickedMouseButton, long timeSinceLastClick) {
+        super.mouseClickMove(mouseX, mouseY, clickedMouseButton, timeSinceLastClick);
+        if (!rewardPointerDown || clickedMouseButton != 0 || currentTab != TAB_REWARDS) return;
+        int x = toUiCoordinate(mouseX);
+        if (Math.abs(x - rewardPointerStartX) >= 4) rewardDragged = true;
+        if (!rewardDragged) return;
+        int dx = x - rewardPointerLastX;
+        rewardScrollOffset = Math.max(0f, Math.min(maxRewardScroll(), rewardScrollOffset - dx));
+        rewardRenderOffset = rewardScrollOffset;
+        rewardScrollVelocity = 0;
+        rewardSpringBack = false;
+        rewardPointerLastX = x;
+    }
+
+    @Override
+    protected void mouseReleased(int mouseX, int mouseY, int state) {
+        super.mouseReleased(mouseX, mouseY, state);
+        if (!rewardPointerDown || state != 0) return;
+        int x = toUiCoordinate(mouseX), y = toUiCoordinate(mouseY);
+        PassSnapshot.RewardCard clicked = !rewardDragged ? rewardCardAt(x, y) : null;
+        if (clicked != null && clicked == pendingRewardCard) {
+            selectedRewardCard = clicked;
+            handler.sendRequestRewardPreview(clicked.rewardId);
+        }
+        rewardPointerDown = false;
+        rewardDragged = false;
+        pendingRewardCard = null;
     }
 
     @Override
@@ -1458,6 +1417,7 @@ public class PassMainScreen extends GuiScreen {
         super.handleMouseInput();
         int scroll = Mouse.getEventDWheel();
         if (scroll == 0) return;
+        if (purchasePreviewOpen || selectedRewardCard != null || showSettlement) return;
         updateAdaptiveLayout();
         int gl = getGuiLeft(), gt = getGuiTop();
         int mx = toUiCoordinate(Mouse.getEventX() * width / mc.displayWidth);
@@ -1465,14 +1425,7 @@ public class PassMainScreen extends GuiScreen {
 
         float impulse = scroll > 0 ? -24f : 24f;
 
-        if (compactLayout && getRenderedRightPanelWidth() > 0) {
-            int panelWidth = getRenderedRightPanelWidth();
-            if (GuiHelper.isMouseInRect(
-                    mx, my, gl + guiW - panelWidth,
-                    gt + TOP_BAR_HEIGHT, panelWidth, guiH - TOP_BAR_HEIGHT)) {
-                return;
-            }
-        }
+        if (isPointCoveredByRightPanel(mx, my)) return;
 
         int cx = gl + NAV_WIDTH, cy = gt + TOP_BAR_HEIGHT;
         int cw = getContentWidth(), ch = guiH - TOP_BAR_HEIGHT;
@@ -1507,14 +1460,7 @@ public class PassMainScreen extends GuiScreen {
             float dt = (now - rewardLastRenderTime) / 50.0f;
             if (dt <= 0) dt = 0.05f;
             rewardLastRenderTime = now;
-            int cardSpacing = 76;
-            int maxLevel = 1;
-            if (snapshot != null && snapshot.rewardWindow != null) {
-                for (PassSnapshot.RewardCard card : snapshot.rewardWindow) {
-                    if (card.level > maxLevel) maxLevel = card.level;
-                }
-            }
-            float maxScroll = Math.max(0, maxLevel * cardSpacing - getContentWidth() + 60);
+            float maxScroll = maxRewardScroll();
             if (rewardSpringBack) {
                 float target = rewardScrollOffset < 0 ? 0 : (rewardScrollOffset > maxScroll ? maxScroll : rewardScrollOffset);
                 float diff = target - rewardScrollOffset;
@@ -1555,20 +1501,24 @@ public class PassMainScreen extends GuiScreen {
 
     private List<PassSnapshot.TrackedTask> buildFilteredTasks() {
         List<PassSnapshot.TrackedTask> f = new ArrayList<>();
+        String group = taskCategory == 0 ? "daily" : taskCategory == 1 ? "weekly" : "season";
         if (showHiddenTasks && snapshot != null && snapshot.hiddenTasks != null) {
             for (int i = 0; i <= hiddenRevealIndex && i < snapshot.hiddenTasks.size(); i++)
-                f.add(snapshot.hiddenTasks.get(i));
+                if (group.equals(snapshot.hiddenTasks.get(i).group)) f.add(snapshot.hiddenTasks.get(i));
         } else if (snapshot != null && snapshot.trackedTasks != null) {
-            String gf = null;
-            switch (taskCategory) {
-                case 0: gf = "daily"; break; case 1: gf = "weekly"; break;
-                case 2: gf = "season"; break; case 3: gf = "limited"; break;
-                case 4: gf = "guild"; break;
-            }
             for (PassSnapshot.TrackedTask t : snapshot.trackedTasks)
-                if (gf == null || gf.equals(t.group)) f.add(t);
+                if (group.equals(t.group)) f.add(t);
         }
         return f;
+    }
+
+    private float maxRewardScroll() {
+        int maxLevel = 1;
+        if (snapshot != null && snapshot.rewardWindow != null) {
+            for (PassSnapshot.RewardCard card : snapshot.rewardWindow)
+                if (card.level > maxLevel) maxLevel = card.level;
+        }
+        return Math.max(0f, maxLevel * 76f - Math.max(0, getContentWidth() - 68));
     }
 
     private String formatRemainingTime(long ms) {

@@ -225,7 +225,6 @@ public class PassPacketHandler {
             Minecraft.getMinecraft().displayGuiScreen(new PassMainScreen(snapshot));
         }
         sendRequestAssets();
-        sendRequestPartnerData();
         sendRequestOverflow();
     }
 
